@@ -9,9 +9,10 @@ class Plan(BaseModel):
     allows: List[Plan] = []
     children: List[Plan] = []
     description: str = ""
-    position: Optional[Tuple[2]]
     completed: bool = False
     shown_completed: bool = False
+    position: Optional[Tuple[2]]
+    is_open: bool = False
 
     def __post_init__(self):
         if self.parent is not None:
@@ -42,22 +43,22 @@ class Plan(BaseModel):
     def add_dependency(self, new: Plan):
         if new not in self.dependencies:
             self.dependencies.append(new)
-#            new.add_next(self)
+            new.add_next(self)
     
     def add_next(self, new: Plan):
         if new not in self.allows:
             self.allows.append(new)
-#            new.add_dependency(self)
+            new.add_dependency(self)
     
     def add_child(self, new: Plan):
         if new not in self.children:
             self.children.append(new)
-#            new.set_parent(self)
+            new.set_parent(self)
 
     def set_parent(self, new: Plan):
         if self.parent != new:
             self.parent = new
-#            new.add_child(self)
+            new.add_child(self)
     
     def create_dependency(self, name: str):
         Plan(
