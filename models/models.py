@@ -1,3 +1,4 @@
+import os
 import json
 from hashlib import sha1
 from pydantic import BaseModel, ConfigDict
@@ -9,20 +10,76 @@ class BaseTask(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     name: str
 
+
+class PlanContainer(BaseTask): 
+    DEFAULT_PLAN_FOLDER: str = "plans"
+    path: str = None
+    plans: List[BaseTask] = []
+    def model_post_init(self, __context):
+        os.makedirs(self.DEFAULT_PLAN_FOLDER, exist_ok=True)
+        self.path = os.path.join(self.DEFAULT_PLAN_FOLDER, self.name)
+        if os.path.exists(self.path):
+            self.load()
+        else:
+            os.makedirs(self.path)
+    
+    def __repr__(self):
+        return f"PlanContainer(name={self.name}, plans={self.plans})"
+
+    def create_plan(self, name: str):
+        new_plan = Plan(
+            container=self,
+            name=name
+        )
+        self.plans.append(new_plan)
+        return new_plan
+    
+    def save(self):
+        for plan in self.plans:
+            plan.save()
+
+    def load(self):
+        for json_filename in [fn for fn in os.listdir(self.path) if fn.endswith(".json")]:
+            self.create_plan(json_filename[:-5])
+
+
 class Plan(BaseTask):
+    container: PlanContainer
     root: BaseTask = None
+    path: str = None
 
     def model_post_init(self, __context):
+        self.path = os.path.join(self.container.path, self.name + ".json")
         self.root = Task(
-            level=0,
             name=self.name,
             plan=self
         )
+        if os.path.exists(self.path):
+            self.load()
+
+    def __repr__(self):
+        return f"Plan(name={self.name}, root_tasks={self.root.children})"
+    
+    def save(self):
+        plan_json = self.root.get_json()
+        with open(self.path, "w") as file:
+            json.dump(plan_json, file, indent=4)
+
+    def load(self):
+        if os.path.exists(self.path):
+            task_json = json.load(open(self.path))
+            self.root.load_from_json(task_json)
+        else:
+            raise ValueError(f"Plan json file {self.path} not found")
+
+    def create_child(self, name: str):
+        return self.root.create_child(name)
+
 
 class Task(BaseTask):
-    id: int = None
+    id: str = None
     plan: Plan
-    level: int
+    level: int = 0
     parent: Optional[BaseTask] = None
     dependencies: List[BaseTask] = []
     nexts: List[BaseTask] = []
@@ -36,6 +93,7 @@ class Task(BaseTask):
     def model_post_init(self, __context):
         super().model_post_init(__context)
         if self.parent is not None:
+            self.level = self.parent.level + 1
             if self.name in self.parent.children:
                 self.delete()
                 raise ValueError(f"Child with name {self.name} already exists in parent {self.parent.name}")
@@ -107,7 +165,6 @@ class Task(BaseTask):
     
     def create_dependency(self, name: str):
         return Task(
-            level=self.level,
             name=name,
             plan=self.plan,
             parent=self.parent,
@@ -116,7 +173,6 @@ class Task(BaseTask):
     
     def create_next(self, name: str):
         return Task(
-            level=self.level,
             name=name,
             plan=self.plan,
             parent=self.parent,
@@ -125,7 +181,6 @@ class Task(BaseTask):
 
     def create_child(self, name: str):
         return Task(
-            level=self.level + 1,
             name=name,
             plan=self.plan,
             parent=self
@@ -145,7 +200,6 @@ class Task(BaseTask):
     def get_json(self):
         self_dict = {
             "name": self.name,
-            "plan": self.plan.name,
             "dependencies": [dep.name for dep in self.dependencies],
             "nexts": [next.name for next in self.nexts],
             "description": self.description,
@@ -156,3 +210,23 @@ class Task(BaseTask):
             for name, child in self.children.items()
         }
         return self_dict
+    
+    def load_from_json(self, task_json: dict):
+        self.name = task_json["name"]
+        self.completed = task_json["completed"]
+        self.description = task_json["description"]
+
+        if self.parent is not None:
+            for dep in task_json["dependencies"]:
+                self.add_dependency(
+                    self.parent.children[dep]
+                )
+            for next in task_json["nexts"]:
+                self.add_next(
+                    self.parent.children[next]
+                )
+
+        for child_name in task_json["children"].keys():
+            self.create_child(child_name)
+        for child_name, sub_json in task_json["children"].items():
+            self.children[child_name].load_from_json(sub_json)
